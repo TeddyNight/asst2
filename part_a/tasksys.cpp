@@ -193,24 +193,31 @@ TaskSystemParallelThreadPoolSleeping::TaskSystemParallelThreadPoolSleeping(int n
     // (requiring changes to tasksys.h).
     //
     this->started = true;
+    this->total = 0;
+    this->num_threads = num_threads;
+    
     for (int i = 0; i < num_threads; i++) {
+	done.push_back(false);
         threads.push_back(std::thread([=](){
                     std::unique_lock<std::mutex> lck(m1);
                     while (started) {
+		    	// make sure threads created
+		    	{
+			std::lock_guard<std::mutex> lck2(m2);
+		    	done[i] = true;
+		    	cond_main.notify_one();
+			}
+			int total;
+			IRunnable *runnable;
                         {
                         cond_worker.wait(lck);
+			total = this->total;
+			runnable = this->runnable;
                         }
-                        m3.lock();
-                        while (this->works > 0) {
-                        int work = this->works - 1;
-                        this->works--;
-                        m3.unlock();
-                        this->runnable->runTask(work, this->total);
-                        m3.lock();
-                        this->done++;
-                        }
-                        m3.unlock();
-                        cond_main.notify_one();
+			int work = total / num_threads;
+			for (int j = work * i; (i == num_threads - 1 || j < work * (i + 1)) && j < total; j++) {
+			runnable->runTask(j, total);
+			}
                     }
                     }));
     }
@@ -224,6 +231,7 @@ TaskSystemParallelThreadPoolSleeping::~TaskSystemParallelThreadPoolSleeping() {
     // (requiring changes to tasksys.h).
     //
     this->started = false;
+    this->total = 0;
     cond_worker.notify_all();
     for (auto i = threads.begin(); i != threads.end(); ++i) {
         i->join();
@@ -244,14 +252,39 @@ void TaskSystemParallelThreadPoolSleeping::run(IRunnable* runnable, int num_tota
         runnable->runTask(i, num_total_tasks);
     }
 #endif
-    this->total = num_total_tasks;
-    this->works = num_total_tasks;
-    this->runnable = runnable;
-    this->done = 0;
-    
+    // get threads ready to be notified
+    {
+    std::lock_guard<std::mutex> lck1(m1);
+    this->total = 0;
+    }
     std::unique_lock<std::mutex> lck(m2);
+
+    {
+    cond_main.wait(lck, [=]{
+		    bool result = true;
+		    for (int i = 0; i < num_threads; i++) {
+		    	result = result && done[i];
+		    }
+		    return result;
+		    });
+    std::lock_guard<std::mutex> lck1(m1);
+    this->total = num_total_tasks;
+    this->runnable = runnable;
+    for (int i = 0; i < num_threads; i++) {
+	    done[i] = false;
+    }
+    }
+    
     cond_worker.notify_all();
-    cond_main.wait(lck, [=]{ return this->done == num_total_tasks; });
+    {
+    cond_main.wait(lck, [=]{
+		    bool result = true;
+		    for (int i = 0; i < num_threads; i++) {
+		    	result = result && done[i];
+		    }
+		    return result;
+		    });
+    }
 }
 
 TaskID TaskSystemParallelThreadPoolSleeping::runAsyncWithDeps(IRunnable* runnable, int num_total_tasks,

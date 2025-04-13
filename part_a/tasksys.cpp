@@ -72,8 +72,7 @@ void TaskSystemParallelSpawn::run(IRunnable* runnable, int num_total_tasks) {
     std::vector<std::thread> threads;
     for (int i = 0; i < num_threads; i++) {
 	    threads.push_back(std::thread([=]{
-				    int work = num_total_tasks / num_threads;
-				    for (int j = work * i; (i == num_threads - 1 || j < work * (i + 1)) && j < num_total_tasks; j++) {
+				    for (int j = i; j < num_total_tasks; j += num_threads) {
 				    runnable->runTask(j, num_total_tasks);
 				    }
 				    }));

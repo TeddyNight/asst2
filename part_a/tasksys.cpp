@@ -194,27 +194,25 @@ TaskSystemParallelThreadPoolSleeping::TaskSystemParallelThreadPoolSleeping(int n
     this->started = true;
     this->total = 0;
     this->num_threads = num_threads;
+    this->done = 0;
     
     for (int i = 0; i < num_threads; i++) {
-	done.push_back(false);
         threads.push_back(std::thread([=](){
-                    std::unique_lock<std::mutex> lck(m1);
                     while (started) {
 		    	// make sure threads created
-		    	{
-			std::lock_guard<std::mutex> lck2(m2);
-		    	done[i] = true;
-		    	cond_main.notify_one();
-			}
 			int total;
 			IRunnable *runnable;
                         {
+                    	std::unique_lock<std::mutex> lck(m1);
+			this->done++;
+			if (this->done == num_threads) {
+		    	cond_main.notify_one();
+			}
                         cond_worker.wait(lck);
 			total = this->total;
 			runnable = this->runnable;
                         }
-			int work = total / num_threads;
-			for (int j = work * i; (i == num_threads - 1 || j < work * (i + 1)) && j < total; j++) {
+			for (int j = i; j < total; j += num_threads) {
 			runnable->runTask(j, total);
 			}
                     }
@@ -256,33 +254,23 @@ void TaskSystemParallelThreadPoolSleeping::run(IRunnable* runnable, int num_tota
     std::lock_guard<std::mutex> lck1(m1);
     this->total = 0;
     }
-    std::unique_lock<std::mutex> lck(m2);
 
     {
-    cond_main.wait(lck, [=]{
-		    bool result = true;
-		    for (int i = 0; i < num_threads; i++) {
-		    	result = result && done[i];
-		    }
-		    return result;
-		    });
+    std::unique_lock<std::mutex> lck(m2);
+    cond_main.wait(lck, [=]{ return this->done == num_threads; });
+    }
+
+    {
     std::lock_guard<std::mutex> lck1(m1);
     this->total = num_total_tasks;
     this->runnable = runnable;
-    for (int i = 0; i < num_threads; i++) {
-	    done[i] = false;
-    }
+    this->done = 0;
     }
     
     cond_worker.notify_all();
     {
-    cond_main.wait(lck, [=]{
-		    bool result = true;
-		    for (int i = 0; i < num_threads; i++) {
-		    	result = result && done[i];
-		    }
-		    return result;
-		    });
+    std::unique_lock<std::mutex> lck(m2);
+    cond_main.wait(lck, [=]{ return this->done == num_threads; });
     }
 }
 

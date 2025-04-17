@@ -2,6 +2,12 @@
 #define _TASKSYS_H
 
 #include "itasksys.h"
+#include <vector>
+#include <queue>
+#include <condition_variable>
+#include <thread>
+#include <atomic>
+#include <algorithm>
 
 /*
  * TaskSystemSerial: This class is the student's implementation of a
@@ -53,6 +59,13 @@ class TaskSystemParallelThreadPoolSpinning: public ITaskSystem {
         void sync();
 };
 
+typedef struct Task {
+	IRunnable *runnable;
+	int num_total_tasks;
+	TaskID id;
+	std::vector<TaskID> depends;
+} Task;
+
 /*
  * TaskSystemParallelThreadPoolSleeping: This class is the student's
  * optimized implementation of a parallel task execution engine that uses
@@ -60,6 +73,18 @@ class TaskSystemParallelThreadPoolSpinning: public ITaskSystem {
  * itasksys.h for documentation of the ITaskSystem interface.
  */
 class TaskSystemParallelThreadPoolSleeping: public ITaskSystem {
+    private:
+	std::vector<std::thread> threads;
+	std::mutex m1, m2;
+	int num_threads;
+	bool started;
+	std::queue<Task> waiting, ready;
+	std::condition_variable cond_worker, ready_worker, main_done;
+	std::vector<TaskID> finish;
+	//std::vector<bool> done;
+	int created;
+	int done;
+	int count;
     public:
         TaskSystemParallelThreadPoolSleeping(int num_threads);
         ~TaskSystemParallelThreadPoolSleeping();

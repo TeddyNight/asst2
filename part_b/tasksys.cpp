@@ -1,4 +1,5 @@
 #include "tasksys.h"
+#include <stdio.h>
 
 
 IRunnable::~IRunnable() {}
@@ -133,6 +134,77 @@ TaskSystemParallelThreadPoolSleeping::TaskSystemParallelThreadPoolSleeping(int n
     // Implementations are free to add new class member variables
     // (requiring changes to tasksys.h).
     //
+    this->num_threads = num_threads;
+    this->started = true;
+    this->count = 0;
+    this->created = 0;
+    for (int i = 0; i < num_threads; i++) {
+       threads.push_back(std::thread([=]{
+			       while (true) {
+			       // join point: thread ready
+			       {
+			       	  std::unique_lock<std::mutex> lck(m2);
+				  created++;
+				  if (created == num_threads) {
+					  done = 0;
+					  created = 0;
+					  ready_worker.wait(lck, [=]{ return !(started && ready.empty() && waiting.empty());  });
+					  cond_worker.notify_all();
+					  //printf("thread %d wake up all\n", i);
+				  }
+				  else {
+				  	//printf("thread %d waiting...\n", i);
+					// avoid waiting forever when notify task executed before it
+				  	if (started) cond_worker.wait(lck);
+					//printf("thread %d woken up\n", i);
+				  }
+				  if (!started) break;
+			       }
+			       if (!ready.empty()) {
+				       Task &t = ready.front();
+				       //printf("thread %d executing task %d\n", i, t.id);
+				       for (int j = i; j < t.num_total_tasks; j += num_threads) {
+					       t.runnable->runTask(j, t.num_total_tasks);
+				       }
+			       }
+			       
+			       {
+			       std::unique_lock<std::mutex> lck(m2);
+			       done++;
+			       //printf("done %d\n", done);
+			       if (done == num_threads) {
+				        if (!ready.empty()) {
+				        	finish.push_back(ready.front().id);
+						ready.pop();
+					}
+				       	std::queue<Task> pending;
+					while (!waiting.empty()) {
+						Task &t = waiting.front();
+						// TODO: is t.depends subset of finish?
+						unsigned int finish_cnt = 0;
+						for (auto k = t.depends.begin(); k != t.depends.end(); ++k) {
+							auto it = std::find(finish.begin(), finish.end(), *k);
+							if (it != finish.end()) finish_cnt++;
+
+						}
+						if (finish_cnt == t.depends.size()) {
+							ready.push(t);
+						}
+						else {
+							pending.push(t);
+						}
+						waiting.pop();
+					}
+					while (!pending.empty()) {
+						waiting.push(pending.front());
+						pending.pop();
+					}
+			       		if (ready.empty() && waiting.empty()) main_done.notify_all();
+			       }
+			       }
+			       }
+			}));
+    } 
 }
 
 TaskSystemParallelThreadPoolSleeping::~TaskSystemParallelThreadPoolSleeping() {
@@ -142,6 +214,14 @@ TaskSystemParallelThreadPoolSleeping::~TaskSystemParallelThreadPoolSleeping() {
     // Implementations are free to add new class member variables
     // (requiring changes to tasksys.h).
     //
+    {
+    std::unique_lock<std::mutex> lck(m2);
+    started = false;
+    ready_worker.notify_all();
+    }
+    for (int i = 0; i < num_threads; i++) {
+	    threads[i].join();
+    }
 }
 
 void TaskSystemParallelThreadPoolSleeping::run(IRunnable* runnable, int num_total_tasks) {
@@ -165,12 +245,28 @@ TaskID TaskSystemParallelThreadPoolSleeping::runAsyncWithDeps(IRunnable* runnabl
     //
     // TODO: CS149 students will implement this method in Part B.
     //
+    int task_id;
 
-    for (int i = 0; i < num_total_tasks; i++) {
-        runnable->runTask(i, num_total_tasks);
+    // TODO: if depends on done task?
+    {
+    std::unique_lock<std::mutex> lck(m2);
+    task_id = count++;
+    Task t = {
+		    .runnable = runnable,
+		    .num_total_tasks = num_total_tasks,
+		    .id = task_id,
+		    .depends = deps
+		    };
+    if (deps.empty()) {
+	    ready.push(t);
+    }
+    else {
+	    waiting.push(t);
+    }
+    ready_worker.notify_all();
     }
 
-    return 0;
+    return task_id;
 }
 
 void TaskSystemParallelThreadPoolSleeping::sync() {
@@ -179,5 +275,6 @@ void TaskSystemParallelThreadPoolSleeping::sync() {
     // TODO: CS149 students will modify the implementation of this method in Part B.
     //
 
-    return;
+    std::unique_lock<std::mutex> lck(m2);
+    if (!(ready.empty() && waiting.empty())) main_done.wait(lck);
 }

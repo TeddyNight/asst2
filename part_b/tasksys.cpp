@@ -148,7 +148,7 @@ TaskSystemParallelThreadPoolSleeping::TaskSystemParallelThreadPoolSleeping(int n
 				  if (created == num_threads) {
 					  done = 0;
 					  created = 0;
-					  ready_worker.wait(lck, [=]{ return !(started && ready.empty() && waiting.empty());  });
+					  ready_worker.wait(lck, [=]{ return !(started && ready.empty());  });
 					  cond_worker.notify_all();
 					  //printf("thread %d wake up all\n", i);
 				  }

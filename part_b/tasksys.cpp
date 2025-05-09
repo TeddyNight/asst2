@@ -138,70 +138,20 @@ TaskSystemParallelThreadPoolSleeping::TaskSystemParallelThreadPoolSleeping(int n
     this->started = true;
     this->count = 0;
     this->created = 0;
+    this->task_list = new TaskList(num_threads);
     for (int i = 0; i < num_threads; i++) {
        threads.push_back(std::thread([=]{
-			       while (true) {
-			       // join point: thread ready
-			       {
-			       	  std::unique_lock<std::mutex> lck(m2);
-				  created++;
-				  if (created == num_threads) {
-					  done = 0;
-					  created = 0;
-					  ready_worker.wait(lck, [=]{ return !(started && ready.empty());  });
-					  cond_worker.notify_all();
-					  //printf("thread %d wake up all\n", i);
-				  }
-				  else {
-				  	//printf("thread %d waiting...\n", i);
-					// avoid waiting forever when notify task executed before it
-				  	if (started) cond_worker.wait(lck);
-					//printf("thread %d woken up\n", i);
-				  }
-				  if (!started) break;
-			       }
-			       if (!ready.empty()) {
-				       Task &t = ready.front();
-				       //printf("thread %d executing task %d\n", i, t.id);
-				       for (int j = i; j < t.num_total_tasks; j += num_threads) {
-					       t.runnable->runTask(j, t.num_total_tasks);
-				       }
-			       }
-			       
-			       {
-			       std::unique_lock<std::mutex> lck(m2);
-			       done++;
-			       //printf("done %d\n", done);
-			       if (done == num_threads) {
-				        if (!ready.empty()) {
-				        	finish.push_back(ready.front().id);
-						ready.pop();
+			       while (!task_list->is_terminated()) {
+			       		if (task_list->is_empty(i)) {
+						task_list->wait();
+						continue;
 					}
-				       	std::queue<Task> pending;
-					while (!waiting.empty()) {
-						Task &t = waiting.front();
-						// TODO: is t.depends subset of finish?
-						unsigned int finish_cnt = 0;
-						for (auto k = t.depends.begin(); k != t.depends.end(); ++k) {
-							auto it = std::find(finish.begin(), finish.end(), *k);
-							if (it != finish.end()) finish_cnt++;
-
-						}
-						if (finish_cnt == t.depends.size()) {
-							ready.push(t);
-						}
-						else {
-							pending.push(t);
-						}
-						waiting.pop();
+			       		if (!task_list->is_ready(i)) continue;
+					Task t = task_list->front(i);
+					for (int j = i; j < t.num_total_tasks; j += num_threads) {
+						t.runnable->runTask(j, t.num_total_tasks);
 					}
-					while (!pending.empty()) {
-						waiting.push(pending.front());
-						pending.pop();
-					}
-			       		if (ready.empty() && waiting.empty()) main_done.notify_all();
-			       }
-			       }
+					task_list->pop_front(i);
 			       }
 			}));
     } 
@@ -214,11 +164,7 @@ TaskSystemParallelThreadPoolSleeping::~TaskSystemParallelThreadPoolSleeping() {
     // Implementations are free to add new class member variables
     // (requiring changes to tasksys.h).
     //
-    {
-    std::unique_lock<std::mutex> lck(m2);
-    started = false;
-    ready_worker.notify_all();
-    }
+    delete(this->task_list);
     for (int i = 0; i < num_threads; i++) {
 	    threads[i].join();
     }
@@ -245,26 +191,16 @@ TaskID TaskSystemParallelThreadPoolSleeping::runAsyncWithDeps(IRunnable* runnabl
     //
     // TODO: CS149 students will implement this method in Part B.
     //
-    int task_id;
+    int task_id = count++;
 
     // TODO: if depends on done task?
-    {
-    std::unique_lock<std::mutex> lck(m2);
-    task_id = count++;
     Task t = {
 		    .runnable = runnable,
 		    .num_total_tasks = num_total_tasks,
 		    .id = task_id,
 		    .depends = deps
 		    };
-    if (deps.empty()) {
-	    ready.push(t);
-    }
-    else {
-	    waiting.push(t);
-    }
-    ready_worker.notify_all();
-    }
+    task_list->push_back(t);
 
     return task_id;
 }
@@ -275,6 +211,5 @@ void TaskSystemParallelThreadPoolSleeping::sync() {
     // TODO: CS149 students will modify the implementation of this method in Part B.
     //
 
-    std::unique_lock<std::mutex> lck(m2);
-    if (!(ready.empty() && waiting.empty())) main_done.wait(lck);
+    task_list->wait_threads_done();
 }

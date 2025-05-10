@@ -146,7 +146,9 @@ TaskSystemParallelThreadPoolSleeping::TaskSystemParallelThreadPoolSleeping(int n
 						task_list->wait();
 						continue;
 					}
-			       		if (!task_list->is_ready(i)) continue;
+			       		if (!task_list->is_ready(i)) {
+						continue;
+					}
 					Task t = task_list->front(i);
 					for (int j = i; j < t.num_total_tasks; j += num_threads) {
 						t.runnable->runTask(j, t.num_total_tasks);

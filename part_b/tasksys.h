@@ -74,7 +74,7 @@ typedef struct Task {
 class TaskList {
 	private:
 		std::vector<Task> tasks;
-		std::vector<size_t> threads_index;
+		std::atomic<size_t>* threads_index;
 		std::mutex m1;
 		std::condition_variable cond_empty;
 		bool terminated;
@@ -82,8 +82,9 @@ class TaskList {
 	public:
 		TaskList(int num_threads) {
 			this->num_threads = num_threads;
+			this->threads_index = new std::atomic<size_t>[num_threads];
 			for (int i = 0; i < num_threads; i++) {
-				threads_index.push_back(0);
+				threads_index[i] = 0;
 			}
 			terminated = false;
 		};
@@ -107,32 +108,20 @@ class TaskList {
 			std::unique_lock<std::mutex> lck(m1);
 			cond_empty.wait(lck);
 		}
-#if 0
-		bool is_empty(int thread) {
-			// first make sure we have tasks
-			// then check if all it depends done
-			std::unique_lock<std::mutex> lck(m1);
-			cond_empty.wait(lck, [=]{ return !terminated && threads_index[thread] < tasks.size(); });	
-			return terminated || threads_index[thread] >= tasks.size();
-		};
-#endif
 		// must check empty first
 		bool is_ready(int thread) {
 			std::unique_lock<std::mutex> lck(m1);
-			std::vector<TaskID> &deps = tasks[threads_index[thread]].depends;
-			cond_empty.wait(lck, [=]{
-					for (size_t i = 0; i < deps.size(); i++) {
-						if (!is_done(deps[i])) return false;
-					}
-					return true;
-					});
+			std::vector<TaskID> deps = tasks[threads_index[thread]].depends;
+			for (size_t i = 0; i < deps.size(); i++) {
+				if (!is_done(deps[i])) return false;
+			}
 			return true;
 		};
 		Task front(int thread) {
+			std::unique_lock<std::mutex> lck(m1);
 			return tasks[threads_index[thread]];
 		};
 		void pop_front(int thread) {
-			std::unique_lock<std::mutex> lck(m1);
 			threads_index[thread]++;
 			cond_empty.notify_all();
 		};

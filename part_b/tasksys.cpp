@@ -135,10 +135,8 @@ TaskSystemParallelThreadPoolSleeping::TaskSystemParallelThreadPoolSleeping(int n
     // (requiring changes to tasksys.h).
     //
     this->num_threads = num_threads;
-    this->started = true;
-    this->count = 0;
-    this->created = 0;
     this->task_list = new TaskList(num_threads);
+    this->count = 0;
     for (int i = 0; i < num_threads; i++) {
        threads.push_back(std::thread([=]{
 			       while (!task_list->is_terminated()) {
@@ -146,10 +144,8 @@ TaskSystemParallelThreadPoolSleeping::TaskSystemParallelThreadPoolSleeping(int n
 						task_list->wait();
 						continue;
 					}
-			       		if (!task_list->is_ready(i)) {
-						continue;
-					}
 					Task t = task_list->front(i);
+					if (!task_list->is_ready(t.depends)) continue;
 					for (int j = i; j < t.num_total_tasks; j += num_threads) {
 						t.runnable->runTask(j, t.num_total_tasks);
 					}
@@ -166,10 +162,11 @@ TaskSystemParallelThreadPoolSleeping::~TaskSystemParallelThreadPoolSleeping() {
     // Implementations are free to add new class member variables
     // (requiring changes to tasksys.h).
     //
-    delete(this->task_list);
+    task_list->set_terminated();
     for (int i = 0; i < num_threads; i++) {
 	    threads[i].join();
     }
+    delete(task_list);
 }
 
 void TaskSystemParallelThreadPoolSleeping::run(IRunnable* runnable, int num_total_tasks) {
@@ -181,9 +178,8 @@ void TaskSystemParallelThreadPoolSleeping::run(IRunnable* runnable, int num_tota
     // tasks sequentially on the calling thread.
     //
 
-    for (int i = 0; i < num_total_tasks; i++) {
-        runnable->runTask(i, num_total_tasks);
-    }
+    runAsyncWithDeps(runnable, num_total_tasks, std::vector<TaskID>());
+    sync();
 }
 
 TaskID TaskSystemParallelThreadPoolSleeping::runAsyncWithDeps(IRunnable* runnable, int num_total_tasks,

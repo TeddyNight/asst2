@@ -77,8 +77,8 @@ class TaskList {
 		std::atomic<size_t>* threads_index;
 		std::mutex m1;
 		std::condition_variable cond_empty;
-		bool terminated;
 		int num_threads;
+		bool terminated;
 	public:
 		TaskList(int num_threads) {
 			this->num_threads = num_threads;
@@ -88,10 +88,10 @@ class TaskList {
 			}
 			terminated = false;
 		};
-		~TaskList() {
+		void set_terminated() {
 			terminated = true;
 			cond_empty.notify_all();
-		}
+		};
 		void push_back(Task& task) {
 			std::unique_lock<std::mutex> lck(m1);
 			tasks.push_back(task);
@@ -109,9 +109,7 @@ class TaskList {
 			cond_empty.wait(lck);
 		}
 		// must check empty first
-		bool is_ready(int thread) {
-			std::unique_lock<std::mutex> lck(m1);
-			std::vector<TaskID> deps = tasks[threads_index[thread]].depends;
+		bool is_ready(std::vector<TaskID> &deps) {
 			for (size_t i = 0; i < deps.size(); i++) {
 				if (!is_done(deps[i])) return false;
 			}
@@ -153,16 +151,8 @@ class TaskList {
 class TaskSystemParallelThreadPoolSleeping: public ITaskSystem {
     private:
 	std::vector<std::thread> threads;
-	std::mutex m1, m2;
 	int num_threads;
-	bool started;
-	std::queue<Task> waiting, ready;
-	std::condition_variable cond_worker, ready_worker, main_done;
-	std::vector<TaskID> finish;
 	TaskList *task_list;
-	//std::vector<bool> done;
-	int created;
-	int done;
 	int count;
     public:
         TaskSystemParallelThreadPoolSleeping(int num_threads);

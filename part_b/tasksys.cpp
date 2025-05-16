@@ -140,10 +140,9 @@ TaskSystemParallelThreadPoolSleeping::TaskSystemParallelThreadPoolSleeping(int n
     for (int i = 0; i < num_threads; i++) {
        threads.push_back(std::thread([=]{
 			       while (!task_list->is_terminated()) {
-			       		if (task_list->is_empty(i)) {
-						task_list->wait();
-						continue;
-					}
+			       		task_list->notify_main();
+			       		task_list->wait(i);
+					if (task_list->is_terminated()) break;
 					Task t = task_list->front(i);
 					if (!task_list->is_ready(t.depends)) continue;
 					for (int j = i; j < t.num_total_tasks; j += num_threads) {
@@ -163,6 +162,7 @@ TaskSystemParallelThreadPoolSleeping::~TaskSystemParallelThreadPoolSleeping() {
     // (requiring changes to tasksys.h).
     //
     task_list->set_terminated();
+    task_list->notify_threads();
     for (int i = 0; i < num_threads; i++) {
 	    threads[i].join();
     }
@@ -198,7 +198,8 @@ TaskID TaskSystemParallelThreadPoolSleeping::runAsyncWithDeps(IRunnable* runnabl
 		    .id = task_id,
 		    .depends = deps
 		    };
-    task_list->push_back(t);
+    task_list->emplace_back(t);
+    task_list->notify_threads();
 
     return task_id;
 }

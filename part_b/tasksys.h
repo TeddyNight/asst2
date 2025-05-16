@@ -75,10 +75,13 @@ class TaskList {
 	private:
 		std::vector<Task> tasks;
 		std::atomic<size_t>* threads_index;
-		std::mutex m1;
-		std::condition_variable cond_empty;
+		std::mutex m1, m2;
+		std::condition_variable cond_empty, cond_main;
 		int num_threads;
 		bool terminated;
+		bool is_empty(int thread) {
+			return threads_index[thread] >= tasks.size();
+		}
 	public:
 		TaskList(int num_threads) {
 			this->num_threads = num_threads;
@@ -89,24 +92,27 @@ class TaskList {
 			terminated = false;
 		};
 		void set_terminated() {
+			std::unique_lock<std::mutex> lck(m1);
 			terminated = true;
-			cond_empty.notify_all();
 		};
 		void push_back(Task& task) {
 			std::unique_lock<std::mutex> lck(m1);
 			tasks.push_back(task);
+		};
+		// notify when push_back will slow down threads locking process?
+		void notify_threads() {
 			cond_empty.notify_all();
+		};
+		void emplace_back(Task& task) {
+			std::unique_lock<std::mutex> lck(m1);
+			tasks.emplace_back(task);
 		};
 		bool is_terminated() {
 			return terminated;
 		}
-		bool is_empty(int thread) {
+		void wait(int thread) {
 			std::unique_lock<std::mutex> lck(m1);
-			return threads_index[thread] >= tasks.size();
-		}
-		void wait() {
-			std::unique_lock<std::mutex> lck(m1);
-			cond_empty.wait(lck);
+			while (!terminated && is_empty(thread)) cond_empty.wait(lck);
 		}
 		// must check empty first
 		bool is_ready(std::vector<TaskID> &deps) {
@@ -117,11 +123,11 @@ class TaskList {
 		};
 		Task front(int thread) {
 			std::unique_lock<std::mutex> lck(m1);
+			while (!terminated && is_empty(thread)) cond_empty.wait(lck);
 			return tasks[threads_index[thread]];
 		};
 		void pop_front(int thread) {
 			threads_index[thread]++;
-			cond_empty.notify_all();
 		};
 		bool is_done(size_t taskID) {
 			for (int i = 0; i < num_threads; i++) {
@@ -131,13 +137,18 @@ class TaskList {
 			}
 			return true;
 		};
-		void wait_threads_done() {
+		void notify_main() {
 			std::unique_lock<std::mutex> lck(m1);
-			cond_empty.wait(lck, [=]{
-						for (int i = 0; i < num_threads; i++) {
-							if (threads_index[i] < tasks.size()) return false;
-						}
-						return true;
+			if (tasks.empty()) return;
+			if (!is_done(tasks[tasks.size()-1].id)) return;
+			cond_main.notify_one();
+		}
+		void wait_threads_done() {
+			std::unique_lock<std::mutex> lck(m2);
+			if (tasks.empty()) return;
+			int taskID = tasks[tasks.size()-1].id;
+			cond_main.wait(lck, [=]{
+						return is_done(taskID);
 					});
 		}
 };
